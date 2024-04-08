@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+from subprocess import Popen, call, PIPE
+import os, sys, logging, configparser, requests, time
+
+configfile = '/etc/usb-backup/settings.conf' # Config file
+
+
+config = configparser.ConfigParser(interpolation=None)
+config.read(configfile)
+
+
+LUKS_PSW = config['settings']['LUKS_PSW']
+DEV_ID = config['settings']['DEV_ID']
+MOUNTDIR = config['settings']['MOUNTDIR']
+LUKS_NAME = config['settings']['LUKS_NAME']
+TG_BOT_TOKEN = config['settings']['TG_BOT_TOKEN']
+TG_CHAT_ID = config['settings']['TG_CHAT_ID']
+LOCK_FILE = config['settings']['LOCK_FILE']
+SRC_DIR = config['settings']['SRC_DIR']
+LOG_FILE = config['settings']['LOG_FILE']
+MAP_LOCATION = "/dev/mapper/" + LUKS_NAME
+
+
+time_format = "%Y-%m-%d %H:%M:%S"
+formatter = logging.Formatter(fmt='%(asctime)s - %(levelname)s - %(message)s', datefmt=time_format)
+
+logger = logging.getLogger('Custom logger')
+handler = logging.FileHandler(LOG_FILE)
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+
+def copy_dir(src, dst, folder_name):
+    dst_path = dst + '/' + folder_name
+    
+    try:
+        if check_dstpath(dst_path):
+            logger.info("Directory exists")
+        else:    
+            create_mountdir(dst_path)
+        # shutil.copytree(src, dst_path, symlinks=True, dirs_exist_ok=True, exist_ok=True)
+        if call(["sudo", "rsync", "-ravP", src, dst_path]) != 0:
+            tg_send_message("Сбой резервного копирования, извлеките диск")
+            logging.warning("Rsync failed")
+            sys.exit(1)
+        logger.info('Success backup process... Unmounting device')
+        luksclose()
+        tg_send_message("Резервное копирование завершено, извлеките диск. Ожидание 5 минут")
+        # Pause 5 minutes
+        time.sleep(300)
+        delete_lock_file(LOCK_FILE)
+        sys.exit(0)
+        
+    except Exception as e:
+        logger.warning('Failed backup process... Unmounting device')
+        logger.warning(e)
+        luksclose()
+        delete_lock_file(LOCK_FILE)
+        sys.exit(1)
+        
+
+def tg_send_message(msg):
+    json_data = {
+        'chat_id': TG_CHAT_ID,
+        'text': msg
+    }
+    headers = {'Content-Type': 'application/json'}
+    url = 'https://api.telegram.org/bot'+TG_BOT_TOKEN+'/sendMessage'
+    r = requests.post(url, json=json_data, headers=headers)
+
+
+def create_mountdir(path):
+    if call(["sudo", "mkdir", "-p", path]) != 0:
+        logger.warning('Failed create Mountdir')
+        raise IOError("Failed create Mountdir")
+
+
+def luksopen(password, owner=None):
+    logger.info('luksOpen start')
+    csetup = Popen(
+        ["sudo", "cryptsetup", "luksOpen", DEV_ID, LUKS_NAME], stdin=PIPE
+    )
+    csetup.communicate((LUKS_PSW + "\n").encode("ascii"))
+    csetup.wait()
+    if csetup.returncode != 0:
+        logger.warning('luksOpen failed')
+        raise IOError("luksOpen failed")
+
+    # mount it
+    logger.info('Mount it')
+    if call(["sudo", "mount", MAP_LOCATION, MOUNTDIR]) != 0:
+        call(["sudo", "cryptsetup", "luksClose", LUKS_NAME])
+        logger.warning('luksOpen failed')
+        raise IOError("Mount failed")
+
+    # Chown user
+    if owner is not None and owner != "root":
+        call(["sudo", "chown", owner + ":" + owner, MOUNTDIR])
+
+
+def luksclose():
+    if call(["sudo", "umount", MOUNTDIR]) != 0:
+        logger.warning('Failed to unmount')
+        call(["sync"])
+        panic()
+    else:
+        logger.info('Unmount device success')
+        call(["sudo", "cryptsetup", "luksClose", LUKS_NAME])
+
+
+def panic():
+    call(["sudo", "fuser", "-km", MOUNTDIR])
+
+
+def check_connect_disk() -> bool:
+    if os.path.exists(DEV_ID):
+        return True
+    else:
+        return False
+
+
+def check_lock_file() -> bool:
+    if os.path.exists(LOCK_FILE):
+        return True
+    else:
+        return False
+
+
+def check_mount_device() -> bool:
+    with open("/proc/mounts", "r") as file:
+        lines = file.readlines()
+        for line in lines:
+            if MAP_LOCATION in line:
+                return True
+
+
+def check_dstpath(dst_path) -> bool:
+    if os.path.isdir(dst_path):
+        return True
+    else:
+        return False
+
+
+def check_time() -> str:
+    logger.info('Check time')
+    checkTime = time.localtime()
+    timenow = str(checkTime.tm_year) + '-' + str(checkTime.tm_mon) + '-' + str(checkTime.tm_mday)
+    return timenow
+
+
+def create_lock_file(file_path):
+    try:
+        with open(file_path, 'x') as f:
+            f.write('LOCK FILE')
+    except Exception as e:
+        logger.warning("Failed to create lock file")
+        logger.warning(e)
+
+
+def delete_lock_file(file_path):
+    if (os.path.exists(file_path)):
+        try:
+            logger.info('Delete lock file')
+            os.remove(file_path)
+        except Exception as e:
+            logger.warning('Failed to delete lock file')
+            logger.warning(e)
+    else:
+        print("The file doesn't exist")
+
+
+if __name__ == "__main__":
+        
+    if check_connect_disk() and check_lock_file():
+        logger.info("Process is already running")
+        sys.exit(0)
+        
+    elif check_connect_disk() and not check_lock_file():
+        create_lock_file(LOCK_FILE)
+        logger.info('Start backup process')
+        if check_mount_device():
+            tg_send_message("Старт резервного копирования")
+            copy_dir(SRC_DIR, MOUNTDIR, check_time())
+        else:
+            tg_send_message("Старт резервного копирования")
+            luksopen(LUKS_PSW)
+            copy_dir(SRC_DIR, MOUNTDIR, check_time())
+        
+    elif not check_connect_disk and check_lock_file():
+        delete_lock_file(LOCK_FILE)
