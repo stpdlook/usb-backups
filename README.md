@@ -22,7 +22,7 @@
 Скрипт ищет файл с конфигом по пути `/etc/usb-backup/settings.conf`, создаем папку, помещаем туда конфиг, выставляем права (600).
 - `LUKS_PSW = qwerty123` - Пароль для расшифровки диска
 - `DEV_ID = /dev/disk/by-id/usb-SEAGATE_1234567890-part1` - используется id диска, потому что `sdX` может смениться
-- `MOUNTDIR = /mnt/backups` - директория куда будем бэкапить
+- `MOUNTDIR = /mnt/backups` - директория куда будем монтировать диск и бэкапить
 - `LUKS_NAME = EncryptVol` - имя LUKS тома
 - `TG_BOT_TOKEN = 123:abc` - токен telegram бота
 - `TG_CHAT_ID = 1234567890` - ID чата куда будем слать уведомления
