@@ -1,0 +1,10 @@
+[settings]
+LUKS_PSW = qwerty123
+DEV_ID = /dev/disk/by-id/usb-SEAGATE_1234567890-part1
+MOUNTDIR = /mnt/backups
+LUKS_NAME = EncryptVol
+TG_BOT_TOKEN = 123:abc
+TG_CHAT_ID = 1234567890
+LOCK_FILE = /tmp/usb-backup.lock
+SRC_DIR = /src/dir
+LOG_FILE = /var/log/bck-usb.log
